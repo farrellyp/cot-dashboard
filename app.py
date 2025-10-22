@@ -975,8 +975,13 @@ def update_regression_analysis(commodity, category):
     return fig, summary_table
 
 
+# Expose the server for deployment
+server = app.server
+
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    import os
+    port = int(os.environ.get('PORT', 8050))
+    app.run(debug=False, host='0.0.0.0', port=port)
 
 
 # In[ ]:
