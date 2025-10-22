@@ -1,8 +1,4 @@
 # Ignore data files that are too large for GitHub
-Data/Disaggregated_Futures_Only.csv
-Data/commodity_prices.csv
 
 # Common temp files
 *.pyc
-__pycache__/Data/Disaggregated_Futures_Only.csv
-Data/Disaggregated_Futures_Only.csv
