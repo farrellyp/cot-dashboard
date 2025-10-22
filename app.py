@@ -21,7 +21,7 @@ app.title = "COT Analysis Dashboard"
 
 # Load data
 df = pd.read_csv('Data/Disaggregated_Futures_Only.csv')
-df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='%m/%d/%Y %I:%M:%S %p')
+df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='mixed')
 
 # Load and process the price data file
 try:
