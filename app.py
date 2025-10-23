@@ -21,7 +21,14 @@ app.title = "COT Analysis Dashboard"
 
 # Load data
 df = pd.read_csv('Data/Disaggregated_Futures_Only.csv')
-df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='mixed')
+# Handle both date formats: with and without AM/PM
+df['Report_Date_Original'] = df['Report_Date_as_YYYY_MM_DD']  # Keep original string
+df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+# For rows that failed to parse (NaT), try the format without AM/PM
+mask = df['Report_Date'].isna()
+if mask.any():
+    df.loc[mask, 'Report_Date'] = pd.to_datetime(df.loc[mask, 'Report_Date_Original'], format='%m/%d/%Y %I:%M:%S', errors='coerce')
+df.drop('Report_Date_Original', axis=1, inplace=True)
 
 # Load and process the price data file
 try:
@@ -32,7 +39,14 @@ try:
     price_df = pd.melt(price_df, id_vars=['Date'], var_name='Commodity Name', value_name='Price')
 
     # 3. Convert the 'Date' column using the specific MM/DD/YYYY format
-    price_df['Date'] = pd.to_datetime(price_df['Date'], format='mixed')
+    # Handle both formats: with and without AM/PM
+    price_df['Date_Original'] = price_df['Date']  # Keep original string
+    price_df['Date'] = pd.to_datetime(price_df['Date'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+    # For rows that failed to parse (NaT), try the format without AM/PM
+    mask = price_df['Date'].isna()
+    if mask.any():
+        price_df.loc[mask, 'Date'] = pd.to_datetime(price_df.loc[mask, 'Date_Original'], format='%m/%d/%Y %I:%M:%S', errors='coerce')
+    price_df.drop('Date_Original', axis=1, inplace=True)
 
     # 4. Convert commodity names to uppercase to match the COT data
     price_df['Commodity Name'] = price_df['Commodity Name'].str.upper()
@@ -923,38 +937,7 @@ def update_treemap_chart(week, commodities_filter, display_mode):
         return fig
 
 
-@app.callback(
-    [Output('regression-chart', 'figure'),
-     Output('regression-summary-table', 'children')],
-    [Input('regression-commodity-dropdown', 'value'),
-     Input('regression-category-dropdown', 'value')]
-)
-def update_regression_analysis(commodity, category):
-    """Update the regression plot and correlation table"""
-    if not commodity or not category or price_df.empty:
-        return go.Figure(layout={'title': 'Please select a commodity and category'}), []
-
-    cot_comm_df = df[df['Commodity Name'] == commodity].copy()
-    price_comm_df = price_df[price_df['Commodity Name'] == commodity].copy()
-
-    if cot_comm_df.empty or price_comm_df.empty:
-        return go.Figure(layout={'title': f'No price or COT data available for {commodity}'}), []
-
-    merged_df = pd.merge(cot_comm_df, price_comm_df, left_on='Report_Date', right_on='Date', how='inner').sort_values('Report_Date').reset_index(drop=True)
-
-    if len(merged_df) < 2:
-        return go.Figure(layout={'title': 'Not enough overlapping data to calculate changes'}), []
-
-    merged_df['Price_Change'] = merged_df['Price'].diff()
-    categories = {'M_Money': 'Managed Money', 'Prod_Merc': 'Producer/Merchant', 'Swap': 'Swap Dealers', 'Other_Rept': 'Other Reportables', 'NonRept': 'Non-Reportables'}
-    corr_data = []
-
-    for code, label in categories.items():
-        long_col, short_col = (f'Swap_Positions_Long_All', f'Swap_Positions_Short_All') if code == 'Swap' else (f'{code}_Positions_Long_All', f'{code}_Positions_Short_All')
-        if long_col in merged_df.columns and short_col in merged_df.columns:
-            merged_df[f'{code}_Net'] = merged_df[long_col] - merged_df[short_col]
-            merged_df[f'{code}_Net_Change'] = merged_df[f'{code}_Net'].diff()
-            correlation = merged_df['Price_Change'].corr(merged_df[f'{code}_Net_Change'])
+ merged_df['Price_Change'].corr(merged_df[f'{code}_Net_Change'])
             corr_data.append({'Category': label, 'Correlation': correlation})
 
     merged_df.dropna(subset=['Price_Change', f'{category}_Net_Change'], inplace=True)
