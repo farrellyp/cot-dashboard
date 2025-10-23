@@ -936,19 +936,88 @@ def update_treemap_chart(week, commodities_filter, display_mode):
         )
         return fig
 
+@app.callback(
+    [Output('regression-chart', 'figure'),
+     Output('regression-summary-table', 'children')],
+    [Input('regression-commodity-dropdown', 'value'),
+     Input('regression-category-dropdown', 'value')]
+)
+def update_regression_analysis(commodity, category):
+    """Update the regression plot and correlation table"""
+    if not commodity or not category or price_df.empty:
+        return go.Figure(layout={'title': 'Please select a commodity and category'}), []
 
- merged_df['Price_Change'].corr(merged_df[f'{code}_Net_Change'])
+    cot_comm_df = df[df['Commodity Name'] == commodity].copy()
+    price_comm_df = price_df[price_df['Commodity Name'] == commodity].copy()
+
+    if cot_comm_df.empty or price_comm_df.empty:
+        return go.Figure(layout={'title': f'No price or COT data available for {commodity}'}), []
+
+    merged_df = pd.merge(cot_comm_df, price_comm_df, left_on='Report_Date', right_on='Date', how='inner').sort_values('Report_Date').reset_index(drop=True)
+
+    if len(merged_df) < 2:
+        return go.Figure(layout={'title': 'Not enough overlapping data to calculate changes'}), []
+
+    merged_df['Price_Change'] = merged_df['Price'].diff()
+    categories = {'M_Money': 'Managed Money', 'Prod_Merc': 'Producer/Merchant', 'Swap': 'Swap Dealers', 'Other_Rept': 'Other Reportables', 'NonRept': 'Non-Reportables'}
+    corr_data = []
+
+    for code, label in categories.items():
+        long_col, short_col = (f'Swap_Positions_Long_All', f'Swap_Positions_Short_All') if code == 'Swap' else (f'{code}_Positions_Long_All', f'{code}_Positions_Short_All')
+        if long_col in merged_df.columns and short_col in merged_df.columns:
+            merged_df[f'{code}_Net'] = merged_df[long_col] - merged_df[short_col]
+            merged_df[f'{code}_Net_Change'] = merged_df[f'{code}_Net'].diff()
+            correlation = merged_df['Price_Change'].corr(merged_df[f'{code}_Net_Change'])
             corr_data.append({'Category': label, 'Correlation': correlation})
 
     merged_df.dropna(subset=['Price_Change', f'{category}_Net_Change'], inplace=True)
     if merged_df.empty:
         return go.Figure(layout={'title': 'No valid data points after calculating weekly changes.'}), []
 
+    # Calculate regression using sklearn
     y_col = f'{category}_Net_Change'
-    fig = px.scatter(merged_df, x='Price_Change', y=y_col, trendline='ols', trendline_color_override='red',
-                     labels={'Price_Change': 'Weekly Price Change', y_col: f'Weekly Net Position Change ({categories[category]})'},
-                     hover_data={'Report_Date': '|%Y-%m-%d'})
-    fig.update_layout(title=f'{commodity}: Price Change vs. {categories[category]} Net Position Change', template='plotly_white')
+    X = merged_df['Price_Change'].values.reshape(-1, 1)
+    y = merged_df[y_col].values
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
+    
+    # Create figure with scatter plot
+    fig = go.Figure()
+    
+    # Add scatter points
+    fig.add_trace(go.Scatter(
+        x=merged_df['Price_Change'], 
+        y=merged_df[y_col],
+        mode='markers',
+        name='Data Points',
+        marker=dict(size=8, color='#1f77b4'),
+        customdata=merged_df['Report_Date'].dt.strftime('%Y-%m-%d'),
+        hovertemplate='Date: %{customdata}<br>Price Change: %{x:.2f}<br>Position Change: %{y:.2f}<extra></extra>'
+    ))
+    
+    # Add regression line
+    fig.add_trace(go.Scatter(
+        x=merged_df['Price_Change'],
+        y=y_pred,
+        mode='lines',
+        name='Trendline',
+        line=dict(color='red', width=2),
+        hovertemplate='Trendline<extra></extra>'
+    ))
+    
+    # Calculate R-squared
+    r_squared = model.score(X, y)
+    
+    fig.update_layout(
+        title=f'{commodity}: Price Change vs. {categories[category]} Net Position Change<br><sub>R² = {r_squared:.3f}</sub>',
+        xaxis_title='Weekly Price Change',
+        yaxis_title=f'Weekly Net Position Change ({categories[category]})',
+        template='plotly_white',
+        showlegend=True,
+        hovermode='closest'
+    )
 
     corr_df = pd.DataFrame(corr_data).dropna().sort_values('Correlation', ascending=False)
     header = [html.Thead(html.Tr([html.Th('Trader Category'), html.Th('Correlation')]))]
