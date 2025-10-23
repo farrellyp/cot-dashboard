@@ -168,9 +168,13 @@ def render_position_changes_tab():
                     html.Label('Chart Options:', style={'fontWeight': 'bold'}),
                     dcc.Checklist(
                         id='position-changes-chart-options',
-                        options=[{'label': '  Show Price', 'value': 'show_price'}],
+                        options=[
+                            {'label': '  Show Price', 'value': 'show_price'},
+                            {'label': '  Show Historical Max', 'value': 'show_hist_max'},
+                            {'label': '  Show Historical Min', 'value': 'show_hist_min'}
+                        ],
                         value=['show_price'] if not price_df.empty else [],
-                        inline=True,
+                        inline=False,
                         style={'marginTop': '10px'}
                     )
                 ], style={'width': '12%', 'display': 'inline-block', 'marginLeft': '2%'})
@@ -461,6 +465,8 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
     """Update the position changes chart, with optional price overlay."""
     lines_to_plot = [line1_cats, line2_cats, line3_cats, line4_cats, line5_cats]
     show_price = 'show_price' in chart_options if chart_options else False
+    show_hist_max = 'show_hist_max' in chart_options if chart_options else False
+    show_hist_min = 'show_hist_min' in chart_options if chart_options else False
 
     if not commodity:
         return go.Figure(), []
@@ -571,27 +577,40 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
                 line=dict(color=line_color)
             ), secondary_y=False)
 
-            # Calculate and add max historical net position line (only for 'net' display type)
-            if display_type == 'net':
-                # Calculate max historical net for these categories
-                max_historical_net = pd.Series(0, index=df_historical.index)
+            # Calculate and add max/min historical net position lines (only for 'net' display type)
+            if display_type == 'net' and (show_hist_max or show_hist_min):
+                # Calculate historical net for these categories
+                historical_net = pd.Series(0, index=df_historical.index)
                 for category in categories:
-                    max_historical_net += df_historical.get(f'{category}_net', 0)
+                    historical_net += df_historical.get(f'{category}_net', 0)
                 
-                max_value = max_historical_net.max()
+                # Create lighter shades of the line color (max slightly lighter, min more lighter)
+                lighter_color_max = lighten_color(line_color, amount=0.5)
+                lighter_color_min = lighten_color(line_color, amount=0.6)
                 
-                # Create lighter shade of the line color
-                lighter_color = lighten_color(line_color, amount=0.5)
+                # Add max historical line if requested
+                if show_hist_max:
+                    max_value = historical_net.max()
+                    fig.add_trace(go.Scatter(
+                        x=[df_filtered['Report_Date'].min(), df_filtered['Report_Date'].max()],
+                        y=[max_value, max_value],
+                        name=f'{line_label} (Max Historical)',
+                        mode='lines',
+                        line=dict(color=lighter_color_max, dash='dash', width=2),
+                        showlegend=True
+                    ), secondary_y=False)
                 
-                # Add max historical line
-                fig.add_trace(go.Scatter(
-                    x=[df_filtered['Report_Date'].min(), df_filtered['Report_Date'].max()],
-                    y=[max_value, max_value],
-                    name=f'{line_label} (Max Historical)',
-                    mode='lines',
-                    line=dict(color=lighter_color, dash='dash', width=2),
-                    showlegend=True
-                ), secondary_y=False)
+                # Add min historical line if requested
+                if show_hist_min:
+                    min_value = historical_net.min()
+                    fig.add_trace(go.Scatter(
+                        x=[df_filtered['Report_Date'].min(), df_filtered['Report_Date'].max()],
+                        y=[min_value, min_value],
+                        name=f'{line_label} (Min Historical)',
+                        mode='lines',
+                        line=dict(color=lighter_color_min, dash='dash', width=2),
+                        showlegend=True
+                    ), secondary_y=False)
 
             if not line_values.empty:
                 current_val, start_val = line_values.iloc[-1], line_values.iloc[0]
