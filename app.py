@@ -195,8 +195,8 @@ def render_position_changes_tab():
         dcc.Graph(id='position-changes-chart', style={'height': '600px'}),
 
         html.Div([
-            html.H3('Period Statistics', style={'textAlign': 'center', 'color': '#2c3e50'}),
-            html.Div(id='position-changes-stats', style={'display': 'flex', 'justifyContent': 'space-around'})
+            html.H3('Period Statistics', style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': '20px'}),
+            html.Div(id='position-changes-stats', style={'display': 'flex', 'flexDirection': 'column', 'gap': '15px'})
         ], style={'backgroundColor': '#ecf0f1', 'padding': '20px', 'borderRadius': '10px', 'marginTop': '20px'})
     ])
 
@@ -616,12 +616,177 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
                 current_val, start_val = line_values.iloc[-1], line_values.iloc[0]
                 change = current_val - start_val
                 pct_change = (change / abs(start_val)) * 100 if start_val != 0 else 0
-                stats_data.append(html.Div([
-                    html.H4(line_label, style={'fontSize': '14px'}),
-                    html.P(f'Current: {current_val:,.0f}'),
-                    html.P(f'Change: {change:+,.0f}', style={'color': '#2ecc71' if change > 0 else '#e74c3c'}),
-                    html.P(f'({pct_change:+.1f}%)', style={'fontSize': '12px', 'color': '#2ecc71' if pct_change > 0 else '#e74c3c'})
-                ], style={'textAlign': 'center', 'padding': '0 10px'}))
+                
+                # Calculate historical values based on display type
+                historical_values = pd.Series(0, index=df_historical.index)
+                for category in categories:
+                    historical_values += df_historical.get(f'{category}_{display_type}', 0)
+                
+                hist_max = historical_values.max() if not historical_values.empty else 0
+                hist_min = historical_values.min() if not historical_values.empty else 0
+                
+                # Calculate percentile rank
+                if len(historical_values) > 0 and not historical_values.empty:
+                    percentile = (historical_values <= current_val).sum() / len(historical_values) * 100
+                else:
+                    percentile = 0
+                
+                # Calculate rate of change metrics
+                if len(line_values) > 1:
+                    # Average change per week over the selected period
+                    avg_change = change / (len(line_values) - 1) if len(line_values) > 1 else 0
+                    # Current change (last week vs previous week)
+                    current_weekly_change = line_values.iloc[-1] - line_values.iloc[-2]
+                    # Weeks to max/min at current rate
+                    if current_weekly_change != 0:
+                        weeks_to_max = abs((hist_max - current_val) / current_weekly_change)
+                        weeks_to_min = abs((hist_min - current_val) / current_weekly_change)
+                    else:
+                        weeks_to_max = float('inf')
+                        weeks_to_min = float('inf')
+                else:
+                    avg_change = 0
+                    current_weekly_change = 0
+                    weeks_to_max = float('inf')
+                    weeks_to_min = float('inf')
+                
+                # Calculate seasonality data (only for net positions)
+                seasonality_data = {}
+                if display_type == 'net':
+                    # Get current week of year
+                    current_date = df_filtered['Report_Date'].iloc[-1]
+                    current_week_of_year = current_date.isocalendar()[1]
+                    current_year = current_date.year
+                    
+                    # Calculate seasonal averages for 5, 10, 20 years and 1, 2, 4 weeks forward
+                    for years_back in [5, 10, 20]:
+                        seasonality_data[years_back] = {}
+                        for weeks_forward in [1, 2, 4]:
+                            changes = []
+                            # Look at historical data for the same week in past years
+                            for year_offset in range(1, years_back + 1):
+                                target_year = current_year - year_offset
+                                # Find data points around this week in that year
+                                year_data = df_historical[df_historical['Report_Date'].dt.year == target_year]
+                                if len(year_data) > 0:
+                                    # Find the closest week to our current week of year
+                                    year_data = year_data.copy()
+                                    year_data['week_of_year'] = year_data['Report_Date'].apply(lambda x: x.isocalendar()[1])
+                                    week_diff = (year_data['week_of_year'] - current_week_of_year).abs()
+                                    if week_diff.min() <= 2:  # Allow +/- 2 weeks tolerance
+                                        base_idx = week_diff.idxmin()
+                                        base_date = year_data.loc[base_idx, 'Report_Date']
+                                        
+                                        # Calculate net position at base date
+                                        base_net = 0
+                                        for category in categories:
+                                            if f'{category}_net' in df_historical.columns:
+                                                base_net += df_historical.loc[base_idx, f'{category}_net']
+                                        
+                                        # Find the date weeks_forward ahead
+                                        target_date = base_date + pd.Timedelta(weeks=weeks_forward)
+                                        future_data = df_historical[
+                                            (df_historical['Report_Date'] >= target_date - pd.Timedelta(days=3)) &
+                                            (df_historical['Report_Date'] <= target_date + pd.Timedelta(days=3))
+                                        ]
+                                        
+                                        if len(future_data) > 0:
+                                            future_idx = future_data.index[0]
+                                            future_net = 0
+                                            for category in categories:
+                                                if f'{category}_net' in df_historical.columns:
+                                                    future_net += df_historical.loc[future_idx, f'{category}_net']
+                                            
+                                            change_value = future_net - base_net
+                                            changes.append(change_value)
+                            
+                            # Calculate average
+                            seasonality_data[years_back][weeks_forward] = np.mean(changes) if len(changes) > 0 else 0
+                else:
+                    # If not net positions, populate with zeros or N/A
+                    for years_back in [5, 10, 20]:
+                        seasonality_data[years_back] = {1: 0, 2: 0, 4: 0}
+                
+                # Create the four-column layout
+                stats_card = html.Div([
+                    # Column 1: Current Position
+                    html.Div([
+                        html.H4('Current Position', style={'fontSize': '16px', 'marginBottom': '15px', 'borderBottom': '2px solid ' + line_color, 'paddingBottom': '5px'}),
+                        html.Div([
+                            html.P('Current:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{current_val:,.0f}', style={'fontSize': '18px', 'marginBottom': '10px'}),
+                            html.P('Period Change:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{change:+,.0f}', style={'fontSize': '16px', 'color': '#2ecc71' if change > 0 else '#e74c3c', 'marginBottom': '10px'}),
+                            html.P('% Change:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{pct_change:+.1f}%', style={'fontSize': '16px', 'color': '#2ecc71' if pct_change > 0 else '#e74c3c'})
+                        ])
+                    ], style={'flex': '1', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'margin': '0 5px'}),
+                    
+                    # Column 2: Historical Extremes
+                    html.Div([
+                        html.H4('Historical Context', style={'fontSize': '16px', 'marginBottom': '15px', 'borderBottom': '2px solid ' + line_color, 'paddingBottom': '5px'}),
+                        html.Div([
+                            html.P('Historical Max:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{hist_max:,.0f}', style={'fontSize': '16px', 'marginBottom': '10px'}),
+                            html.P('Historical Min:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{hist_min:,.0f}', style={'fontSize': '16px', 'marginBottom': '10px'}),
+                            html.P('Percentile Rank:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{percentile:.1f}%', style={'fontSize': '16px', 'color': '#2ecc71' if percentile > 50 else '#e74c3c'})
+                        ])
+                    ], style={'flex': '1', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'margin': '0 5px'}),
+                    
+                    # Column 3: Rate of Change
+                    html.Div([
+                        html.H4('Rate of Change', style={'fontSize': '16px', 'marginBottom': '15px', 'borderBottom': '2px solid ' + line_color, 'paddingBottom': '5px'}),
+                        html.Div([
+                            html.P('Avg Weekly Change:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{avg_change:+,.0f}', style={'fontSize': '16px', 'marginBottom': '10px'}),
+                            html.P('Current Weekly Change:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(f'{current_weekly_change:+,.0f}', style={'fontSize': '16px', 'marginBottom': '10px'}),
+                            html.P('Weeks to Max/Min:', style={'fontWeight': 'bold', 'marginBottom': '5px', 'fontSize': '12px'}),
+                            html.P(
+                                f"{weeks_to_max:.1f} / {weeks_to_min:.1f}" if weeks_to_max < 1000 and weeks_to_min < 1000 else "N/A",
+                                style={'fontSize': '14px'}
+                            )
+                        ])
+                    ], style={'flex': '1', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'margin': '0 5px'}),
+                    
+                    # Column 4: Seasonality Table
+                    html.Div([
+                        html.H4('Seasonality (Avg Forward Change)', style={'fontSize': '16px', 'marginBottom': '15px', 'borderBottom': '2px solid ' + line_color, 'paddingBottom': '5px'}),
+                        html.Table([
+                            html.Thead(html.Tr([
+                                html.Th('Period', style={'padding': '8px', 'fontSize': '12px', 'backgroundColor': '#e9ecef'}),
+                                html.Th('5 Yr', style={'padding': '8px', 'fontSize': '12px', 'backgroundColor': '#e9ecef'}),
+                                html.Th('10 Yr', style={'padding': '8px', 'fontSize': '12px', 'backgroundColor': '#e9ecef'}),
+                                html.Th('20 Yr', style={'padding': '8px', 'fontSize': '12px', 'backgroundColor': '#e9ecef'})
+                            ])),
+                            html.Tbody([
+                                html.Tr([
+                                    html.Td('1 Week', style={'padding': '8px', 'fontSize': '11px', 'fontWeight': 'bold'}),
+                                    html.Td(f"{seasonality_data[5][1]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[5][1] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[10][1]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[10][1] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[20][1]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[20][1] > 0 else '#e74c3c'})
+                                ]),
+                                html.Tr([
+                                    html.Td('2 Week', style={'padding': '8px', 'fontSize': '11px', 'fontWeight': 'bold', 'backgroundColor': '#f8f9fa'}),
+                                    html.Td(f"{seasonality_data[5][2]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'backgroundColor': '#f8f9fa', 'color': '#2ecc71' if seasonality_data[5][2] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[10][2]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'backgroundColor': '#f8f9fa', 'color': '#2ecc71' if seasonality_data[10][2] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[20][2]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'backgroundColor': '#f8f9fa', 'color': '#2ecc71' if seasonality_data[20][2] > 0 else '#e74c3c'})
+                                ]),
+                                html.Tr([
+                                    html.Td('4 Week', style={'padding': '8px', 'fontSize': '11px', 'fontWeight': 'bold'}),
+                                    html.Td(f"{seasonality_data[5][4]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[5][4] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[10][4]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[10][4] > 0 else '#e74c3c'}),
+                                    html.Td(f"{seasonality_data[20][4]:+,.0f}", style={'padding': '8px', 'fontSize': '11px', 'color': '#2ecc71' if seasonality_data[20][4] > 0 else '#e74c3c'})
+                                ])
+                            ])
+                        ], style={'width': '100%', 'borderCollapse': 'collapse', 'border': '1px solid #dee2e6'})
+                    ], style={'flex': '1.2', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'margin': '0 5px'})
+                    
+                ], style={'display': 'flex', 'marginBottom': '20px', 'border': '2px solid ' + line_color, 'borderRadius': '10px', 'padding': '10px', 'backgroundColor': 'white'})
+                
+                stats_data.append(stats_card)
 
     # Add Price Trace if selected
     if show_price and 'Price' in df_filtered.columns and not df_filtered['Price'].dropna().empty:
