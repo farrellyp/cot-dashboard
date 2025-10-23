@@ -21,14 +21,7 @@ app.title = "COT Analysis Dashboard"
 
 # Load data
 df = pd.read_csv('Data/Disaggregated_Futures_Only.csv')
-# Handle both date formats: with and without AM/PM
-df['Report_Date_Original'] = df['Report_Date_as_YYYY_MM_DD']  # Keep original string
-df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
-# For rows that failed to parse (NaT), try the format without AM/PM
-mask = df['Report_Date'].isna()
-if mask.any():
-    df.loc[mask, 'Report_Date'] = pd.to_datetime(df.loc[mask, 'Report_Date_Original'], format='%m/%d/%Y %I:%M:%S', errors='coerce')
-df.drop('Report_Date_Original', axis=1, inplace=True)
+df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='mixed')
 
 # Load and process the price data file
 try:
@@ -39,14 +32,7 @@ try:
     price_df = pd.melt(price_df, id_vars=['Date'], var_name='Commodity Name', value_name='Price')
 
     # 3. Convert the 'Date' column using the specific MM/DD/YYYY format
-    # Handle both formats: with and without AM/PM
-    price_df['Date_Original'] = price_df['Date']  # Keep original string
-    price_df['Date'] = pd.to_datetime(price_df['Date'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
-    # For rows that failed to parse (NaT), try the format without AM/PM
-    mask = price_df['Date'].isna()
-    if mask.any():
-        price_df.loc[mask, 'Date'] = pd.to_datetime(price_df.loc[mask, 'Date_Original'], format='%m/%d/%Y %I:%M:%S', errors='coerce')
-    price_df.drop('Date_Original', axis=1, inplace=True)
+    price_df['Date'] = pd.to_datetime(price_df['Date'], format='mixed')
 
     # 4. Convert commodity names to uppercase to match the COT data
     price_df['Commodity Name'] = price_df['Commodity Name'].str.upper()
@@ -936,6 +922,7 @@ def update_treemap_chart(week, commodities_filter, display_mode):
         )
         return fig
 
+
 @app.callback(
     [Output('regression-chart', 'figure'),
      Output('regression-summary-table', 'children')],
@@ -974,50 +961,11 @@ def update_regression_analysis(commodity, category):
     if merged_df.empty:
         return go.Figure(layout={'title': 'No valid data points after calculating weekly changes.'}), []
 
-    # Calculate regression using sklearn
     y_col = f'{category}_Net_Change'
-    X = merged_df['Price_Change'].values.reshape(-1, 1)
-    y = merged_df[y_col].values
-    
-    model = LinearRegression()
-    model.fit(X, y)
-    y_pred = model.predict(X)
-    
-    # Create figure with scatter plot
-    fig = go.Figure()
-    
-    # Add scatter points
-    fig.add_trace(go.Scatter(
-        x=merged_df['Price_Change'], 
-        y=merged_df[y_col],
-        mode='markers',
-        name='Data Points',
-        marker=dict(size=8, color='#1f77b4'),
-        customdata=merged_df['Report_Date'].dt.strftime('%Y-%m-%d'),
-        hovertemplate='Date: %{customdata}<br>Price Change: %{x:.2f}<br>Position Change: %{y:.2f}<extra></extra>'
-    ))
-    
-    # Add regression line
-    fig.add_trace(go.Scatter(
-        x=merged_df['Price_Change'],
-        y=y_pred,
-        mode='lines',
-        name='Trendline',
-        line=dict(color='red', width=2),
-        hovertemplate='Trendline<extra></extra>'
-    ))
-    
-    # Calculate R-squared
-    r_squared = model.score(X, y)
-    
-    fig.update_layout(
-        title=f'{commodity}: Price Change vs. {categories[category]} Net Position Change<br><sub>R² = {r_squared:.3f}</sub>',
-        xaxis_title='Weekly Price Change',
-        yaxis_title=f'Weekly Net Position Change ({categories[category]})',
-        template='plotly_white',
-        showlegend=True,
-        hovermode='closest'
-    )
+    fig = px.scatter(merged_df, x='Price_Change', y=y_col, trendline='ols', trendline_color_override='red',
+                     labels={'Price_Change': 'Weekly Price Change', y_col: f'Weekly Net Position Change ({categories[category]})'},
+                     hover_data={'Report_Date': '|%Y-%m-%d'})
+    fig.update_layout(title=f'{commodity}: Price Change vs. {categories[category]} Net Position Change', template='plotly_white')
 
     corr_df = pd.DataFrame(corr_data).dropna().sort_values('Correlation', ascending=False)
     header = [html.Thead(html.Tr([html.Th('Trader Category'), html.Th('Correlation')]))]
