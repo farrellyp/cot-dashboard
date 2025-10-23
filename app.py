@@ -471,6 +471,10 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
                      (df['Report_Date'] <= end_date)].copy()
     df_filtered.sort_values('Report_Date', inplace=True)
 
+    # Get historical data for max calculation (all dates for this commodity)
+    df_historical = df[df['Commodity Name'] == commodity].copy()
+    df_historical.sort_values('Report_Date', inplace=True)
+
     # If showing price, merge with price data
     if show_price and not price_df.empty:
         price_comm_df = price_df[price_df['Commodity Name'] == commodity]
@@ -483,12 +487,51 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     stats_data = []
 
+    # Helper function to lighten a color
+    def lighten_color(color_str, amount=0.5):
+        """Lighten a hex or named color by blending with white"""
+        # Handle named colors by converting to a lighter version
+        named_colors = {
+            '#636efa': '#a6aff5',  # blue
+            '#EF553B': '#f79a8a',  # red
+            '#00cc96': '#7fe5c9',  # teal
+            '#ab63fa': '#d5a6fc',  # purple
+            '#FFA15A': '#ffc999',  # orange
+            '#19d3f3': '#8ce9f9',  # cyan
+            '#FF6692': '#ffb0c8',  # pink
+            '#B6E880': '#daf3bf',  # lime
+            '#FF97FF': '#ffcbff',  # magenta
+            '#FECB52': '#fee498',  # yellow
+        }
+        
+        # Check if it's a named Plotly color
+        if color_str in named_colors:
+            return named_colors[color_str]
+        
+        # Handle hex colors
+        try:
+            if color_str.startswith('#'):
+                color_str = color_str[1:]
+            if len(color_str) == 6:
+                r, g, b = int(color_str[0:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16)
+                r = int(r + (255 - r) * amount)
+                g = int(g + (255 - g) * amount)
+                b = int(b + (255 - b) * amount)
+                return f'#{r:02x}{g:02x}{b:02x}'
+        except:
+            pass
+        
+        return color_str
+
     if any(lines_to_plot):
         label_map = {'M_Money': 'Managed Money', 'Prod_Merc': 'Producer/Merchant', 'Swap': 'Swap Dealers',
                      'Other_Rept': 'Other Reportables', 'NonRept': 'Non-Reportables'}
 
+        # Calculate net positions for both filtered and historical data
         for cat_code in label_map.keys():
             long_col, short_col = (f'Swap_Positions_Long_All', f'Swap_Positions_Short_All') if cat_code == 'Swap' else (f'{cat_code}_Positions_Long_All', f'{cat_code}_Positions_Short_All')
+            
+            # For filtered data
             if long_col in df_filtered.columns and short_col in df_filtered.columns:
                 df_filtered[f'{cat_code}_net'] = df_filtered[long_col] - df_filtered[short_col]
                 df_filtered[f'{cat_code}_long'] = df_filtered[long_col]
@@ -498,15 +541,57 @@ def update_position_changes_chart(commodity, start_date, end_date, display_type,
                     df_filtered[f'{cat_code}_percent'] = (net_pos_series - net_pos_series.iloc[0]) / abs(net_pos_series.iloc[0]) * 100
                 else:
                     df_filtered[f'{cat_code}_percent'] = 0
+            
+            # For historical data
+            if long_col in df_historical.columns and short_col in df_historical.columns:
+                df_historical[f'{cat_code}_net'] = df_historical[long_col] - df_historical[short_col]
 
-        for categories in lines_to_plot:
+        # Get default plotly colors
+        default_colors = px.colors.qualitative.Plotly
+        
+        for line_idx, categories in enumerate(lines_to_plot):
             if not categories: continue
+            
+            # Calculate line values for filtered data
             line_values = pd.Series(0, index=df_filtered.index)
             for category in categories:
                 line_values += df_filtered.get(f'{category}_{display_type}', 0)
 
             line_label = ' + '.join([label_map.get(c, c) for c in categories])
-            fig.add_trace(go.Scatter(x=df_filtered['Report_Date'], y=line_values, name=line_label, mode='lines'), secondary_y=False)
+            
+            # Get the color for this line
+            line_color = default_colors[line_idx % len(default_colors)]
+            
+            # Add main line trace
+            fig.add_trace(go.Scatter(
+                x=df_filtered['Report_Date'], 
+                y=line_values, 
+                name=line_label, 
+                mode='lines',
+                line=dict(color=line_color)
+            ), secondary_y=False)
+
+            # Calculate and add max historical net position line (only for 'net' display type)
+            if display_type == 'net':
+                # Calculate max historical net for these categories
+                max_historical_net = pd.Series(0, index=df_historical.index)
+                for category in categories:
+                    max_historical_net += df_historical.get(f'{category}_net', 0)
+                
+                max_value = max_historical_net.max()
+                
+                # Create lighter shade of the line color
+                lighter_color = lighten_color(line_color, amount=0.5)
+                
+                # Add max historical line
+                fig.add_trace(go.Scatter(
+                    x=[df_filtered['Report_Date'].min(), df_filtered['Report_Date'].max()],
+                    y=[max_value, max_value],
+                    name=f'{line_label} (Max Historical)',
+                    mode='lines',
+                    line=dict(color=lighter_color, dash='dash', width=2),
+                    showlegend=True
+                ), secondary_y=False)
 
             if not line_values.empty:
                 current_val, start_val = line_values.iloc[-1], line_values.iloc[0]
