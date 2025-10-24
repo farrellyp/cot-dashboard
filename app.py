@@ -23,6 +23,37 @@ app.title = "COT Analysis Dashboard"
 df = pd.read_csv('Data/Disaggregated_Futures_Only.csv')
 df['Report_Date'] = pd.to_datetime(df['Report_Date_as_YYYY_MM_DD'], format='mixed')
 
+# Define specific Contract_Market_Name filtering for commodities with multiple contract types
+def filter_commodity_contracts(df):
+    """
+    Filter the dataframe to keep only specific contract types for certain commodities
+    to avoid duplicate data for the same date.
+    """
+    # Define the specific contract market names for each commodity
+    commodity_filters = {
+        'NATURAL GAS': 'NAT GAS NYME',
+        'GOLD': 'GOLD',
+        'GASOLINE': 'GASOLINE RBOB',
+        'SOYBEANS': 'SOYBEANS',
+        'WHEAT': 'WHEAT-SRW'
+    }
+    
+    # Create a mask for rows to keep
+    mask = pd.Series([True] * len(df), index=df.index)
+    
+    # Apply filters for each commodity
+    for commodity_name, contract_market_name in commodity_filters.items():
+        # Find rows for this commodity
+        commodity_mask = df['Commodity Name'] == commodity_name
+        # For this commodity, only keep rows with the specific Contract_Market_Name
+        if commodity_mask.any():
+            mask = mask & (~commodity_mask | (df['Contract_Market_Name'] == contract_market_name))
+    
+    return df[mask]
+
+# Apply the filtering
+df = filter_commodity_contracts(df)
+
 # Load and process the price data file
 try:
     # 1. Load the CSV
